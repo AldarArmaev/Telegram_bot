@@ -8,5 +8,7 @@ TOKEN = os.getenv("API_TOKEN")
 
 if not TOKEN:
     raise ValueError("ОШИБКА: Токен бота не найден ни в .env, ни в системных переменных!")
-ADMIN_TG_ID = int(os.getenv("ADMIN_TG_ID"))
+ADMIN_TG_ID = os.getenv("ADMIN_TG_ID")
+if not ADMIN_TG_ID:
+    raise ValueError("ОШИБКА: Id администратора не найден ни в .env, ни в системных переменных!")
 DB_PATH = "beauty_bot.db"
