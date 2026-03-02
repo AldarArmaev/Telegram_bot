@@ -4,7 +4,7 @@ import os
 load_dotenv()
 
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("API_TOKEN")
 
 if not TOKEN:
     raise ValueError("ОШИБКА: Токен бота не найден ни в .env, ни в системных переменных!")
