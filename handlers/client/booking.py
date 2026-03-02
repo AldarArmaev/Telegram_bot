@@ -299,15 +299,16 @@ async def receive_comment(message: Message, state: FSMContext):
 # --- Шаг 6: Телефон ---
 async def _ask_phone(message_or_callback, state: FSMContext):
     await state.set_state(BookingState.phone)
-    text = "📞 Введите номер телефона или нажмите кнопку:"
+    text = "Введите номер телефона или нажмите кнопку:"
     if isinstance(message_or_callback, Message):
         msg = await message_or_callback.answer(text, reply_markup=share_phone_kb())
     else:
-        # Убираем инлайн-кнопки с предыдущего сообщения
+        # Убираем инлайн-кнопки с меню комментария
         try:
             await message_or_callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
+        # Отправляем новым сообщением — оно окажется ниже всех фото
         msg = await message_or_callback.message.answer(text, reply_markup=share_phone_kb())
     await state.update_data(phone_msg_id=msg.message_id)
 
@@ -333,23 +334,25 @@ async def receive_contact(message: Message, state: FSMContext):
     await _process_phone(message, state, phone)
 
 
-# Ввод телефона вручную
 @router.message(BookingState.phone)
 async def receive_phone(message: Message, state: FSMContext):
     import re
+    if not message.text:
+        return
     phone = message.text.strip()
     await message.delete()
 
-    # Валидация — оставляем только цифры и +
     cleaned = re.sub(r'[\s\-\(\)]', '', phone)
     if not re.match(r'^\+?\d{10,15}$', cleaned):
-        await message.answer("⚠️ Неверный формат. Введите номер телефона (например: +79991234567):")
+        await message.answer("Неверный формат. Введите номер (например: +79991234567):")
         return
 
     await _process_phone(message, state, cleaned)
 
 
 async def _process_phone(message: Message, state: FSMContext, phone: str):
+    # Сразу переключаем state чтобы повторные сообщения не обрабатывались
+    await state.set_state(BookingState.name)
     data = await state.get_data()
     if data.get('phone_msg_id'):
         try:
@@ -357,10 +360,8 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
         except Exception:
             pass
     await state.update_data(phone=phone)
-    # Черновик телефона остаётся в истории
-    await message.answer(f"✅ Телефон: {phone}")
-    await state.set_state(BookingState.name)
-    msg = await message.answer("👤 Как к вам обращаться? Введите имя:", reply_markup=remove_kb())
+    await message.answer(f"Телефон: {phone}")
+    msg = await message.answer("Как к вам обращаться? Введите имя:", reply_markup=remove_kb())
     await state.update_data(name_msg_id=msg.message_id)
 
 
@@ -378,26 +379,24 @@ async def receive_name(message: Message, state: FSMContext):
             pass
 
     photos = data.get('comment_photos', [])
-    tg_username = f"@{message.from_user.username}" if message.from_user.username else f"tg://user?id={message.from_user.id}"
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    if username:
+        tg_username = f"@{username}"
+    else:
+        tg_username = f"tg://user?id={tg_id}"
 
+    photo_line = f"\nФото: {len(photos)} шт." if photos else ""
     summary = (
-        f"📋 <b>Проверьте вашу запись:</b>\n\n"
-        f"💇 Услуги: {data['service_names']} — {data['service_total_price']}₽\n"
-        f"👤 Мастер: {data['master_name']}\n"
-        f"📅 Дата: {data['date_label']}\n"
-        f"🕐 Время: {data['time']}\n"
-        f"📞 Телефон: {data['phone']}\n"
-        f"🙋 Имя: {client_name}\n"
-        f"💬 Комментарий: {data.get('comment') or '—'}\n"
-        f"📷 Фото: {len(photos)} шт." if photos else
-        f"📋 <b>Проверьте вашу запись:</b>\n\n"
-        f"💇 Услуги: {data['service_names']} — {data['service_total_price']}₽\n"
-        f"👤 Мастер: {data['master_name']}\n"
-        f"📅 Дата: {data['date_label']}\n"
-        f"🕐 Время: {data['time']}\n"
-        f"📞 Телефон: {data['phone']}\n"
-        f"🙋 Имя: {client_name}\n"
-        f"💬 Комментарий: {data.get('comment') or '—'}"
+        f"<b>Проверьте вашу запись:</b>\n\n"
+        f"Услуги: {data['service_names']} — {data['service_total_price']}₽\n"
+        f"Мастер: {data['master_name']}\n"
+        f"Дата: {data['date_label']}\n"
+        f"Время: {data['time']}\n"
+        f"Телефон: {data['phone']}\n"
+        f"Имя: {client_name}\n"
+        f"Комментарий: {data.get('comment') or '—'}"
+        f"{photo_line}"
     )
 
     await state.update_data(client_name=client_name, tg_username=tg_username)
@@ -431,26 +430,33 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext):
     await delete_all_drafts(callback.bot, callback.message.chat.id, state)
 
     await callback.message.edit_text(
-        f"✅ <b>Запись подтверждена!</b>\n\n"
-        f"💇 {data['service_names']}\n"
-        f"👤 {data['master_name']}\n"
-        f"📅 {data['date_label']} в {data['time']}\n\n"
+        f"<b>Запись подтверждена!</b>\n\n"
+        f"{data['service_names']}\n"
+        f"Мастер: {data['master_name']}\n"
+        f"{data['date_label']} в {data['time']}\n\n"
         f"Ждём вас, {data.get('client_name', '')}! За 24 и 2 часа до приёма придёт напоминание.",
         parse_mode="HTML",
         reply_markup=__import__('keyboards.client_kb', fromlist=['main_menu_kb']).main_menu_kb()
     )
 
     # Уведомление администратору
-    tg_link = data.get('tg_username', '—')
+    tg_link = data.get('tg_username', '')
+    if tg_link.startswith('@'):
+        profile_str = f'<a href="https://t.me/{tg_link[1:]}">{tg_link}</a>'
+    elif tg_link.startswith('tg://'):
+        profile_str = f'<a href="{tg_link}">открыть профиль</a>'
+    else:
+        profile_str = '—'
+
     admin_text = (
-        f"🔔 <b>Новая запись!</b>\n\n"
-        f"🙋 Имя: {data.get('client_name', '—')}\n"
-        f"🔗 Профиль: {tg_link}\n"
-        f"📞 Телефон: {data.get('phone', '—')}\n"
-        f"💇 Услуги: {data['service_names']}\n"
-        f"✂️ Мастер: {data['master_name']}\n"
-        f"📅 {data['date_label']} в {data['time']}\n"
-        f"💬 Комментарий: {data.get('comment') or '—'}"
+        f"<b>Новая запись!</b>\n\n"
+        f"Имя: {data.get('client_name', '—')}\n"
+        f"Профиль: {profile_str}\n"
+        f"Телефон: {data.get('phone', '—')}\n"
+        f"Услуги: {data['service_names']}\n"
+        f"Мастер: {data['master_name']}\n"
+        f"Дата: {data['date_label']} в {data['time']}\n"
+        f"Комментарий: {data.get('comment') or '—'}"
     )
     try:
         await callback.bot.send_message(ADMIN_TG_ID, admin_text, parse_mode="HTML")
