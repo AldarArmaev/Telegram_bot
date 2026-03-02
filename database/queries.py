@@ -55,11 +55,12 @@ async def get_master(master_id: int):
             return {"id": r[0], "name": r[1]} if r else None
 
 
-async def get_available_slots(master_id: int, date: str):
-    """Возвращает список свободных слотов времени для мастера на дату."""
+async def get_available_slots(master_id: int, date: str, total_duration: int = 30):
+    """Возвращает свободные слоты с учётом длительности услуг и занятых диапазонов."""
     from datetime import datetime
+    from config import TZ
+
     async with get_db() as db:
-        # Получаем расписание мастера на этот день недели
         weekday = datetime.strptime(date, "%Y-%m-%d").weekday()
         async with db.execute(
             "SELECT start_time, end_time FROM master_schedule WHERE master_id=? AND weekday=?",
@@ -72,28 +73,50 @@ async def get_available_slots(master_id: int, date: str):
 
         start_h, start_m = map(int, schedule[0].split(":"))
         end_h, end_m = map(int, schedule[1].split(":"))
+        work_start = start_h * 60 + start_m
+        work_end = end_h * 60 + end_m
 
-        # Все занятые слоты на эту дату
-        async with db.execute(
-            "SELECT time FROM appointments WHERE master_id=? AND date=? AND status='active'",
-            (master_id, date)
-        ) as cur:
-            booked = {r[0] for r in await cur.fetchall()}
+        # Получаем все занятые записи с длительностью услуги
+        async with db.execute("""
+            SELECT a.time, s.duration_min
+            FROM appointments a
+            JOIN services s ON a.service_id = s.id
+            WHERE a.master_id=? AND a.date=? AND a.status='active'
+        """, (master_id, date)) as cur:
+            booked_rows = await cur.fetchall()
 
-        # Генерируем слоты по 30 минут
-        slots = []
-        current = start_h * 60 + start_m
-        end = end_h * 60 + end_m
-        now = datetime.now()
+        # Строим занятые диапазоны [start, end)
+        busy = []
+        for row in booked_rows:
+            h, m = map(int, row[0].split(":"))
+            slot_start = h * 60 + m
+            slot_end = slot_start + row[1]
+            busy.append((slot_start, slot_end))
+
+        # Текущее время с учётом часового пояса
+        now = datetime.now(TZ)
         is_today = date == now.strftime("%Y-%m-%d")
         now_minutes = now.hour * 60 + now.minute
 
-        while current < end:
-            slot = f"{current // 60:02d}:{current % 60:02d}"
-            if slot not in booked:
-                # Для сегодня — пропускаем прошедшее время
-                if not is_today or current > now_minutes:
-                    slots.append(slot)
+        slots = []
+        current = work_start
+        while current + total_duration <= work_end:
+            slot_end = current + total_duration
+
+            # Для сегодня — пропускаем прошедшее
+            if is_today and current <= now_minutes:
+                current += 30
+                continue
+
+            # Проверяем пересечение с занятыми диапазонами
+            overlap = any(
+                current < b_end and slot_end > b_start
+                for b_start, b_end in busy
+            )
+
+            if not overlap:
+                slots.append(f"{current // 60:02d}:{current % 60:02d}")
+
             current += 30
 
         return slots

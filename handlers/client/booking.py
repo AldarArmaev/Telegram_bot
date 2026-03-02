@@ -134,7 +134,8 @@ async def back_to_dates(callback: CallbackQuery, state: FSMContext):
 async def back_to_times(callback: CallbackQuery, state: FSMContext):
     await delete_draft(callback.bot, callback.message.chat.id, state, 'draft_time')
     data = await state.get_data()
-    slots = await get_available_slots(data['master_id'], data['date'])
+    total_duration = data.get('service_total_duration', 30)
+    slots = await get_available_slots(data['master_id'], data['date'], total_duration)
     await state.set_state(BookingState.time)
     await callback.message.edit_text("Выберите время:", reply_markup=times_kb(slots))
 
@@ -195,7 +196,8 @@ async def step_date(callback: CallbackQuery, state: FSMContext):
 async def step_time(callback: CallbackQuery, state: FSMContext):
     date = callback.data.split("_", 1)[1]
     data = await state.get_data()
-    slots = await get_available_slots(data['master_id'], date)
+    total_duration = data.get('service_total_duration', 30)
+    slots = await get_available_slots(data['master_id'], date, total_duration)
     if not slots:
         await callback.answer("На эту дату нет свободного времени, выберите другую.", show_alert=True)
         return
@@ -360,7 +362,7 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
         except Exception:
             pass
     await state.update_data(phone=phone)
-    await message.answer(f"Телефон: {phone}")
+    await message.answer(f"✅ Телефон: {phone}")
     msg = await message.answer("Как к вам обращаться? Введите имя:", reply_markup=remove_kb())
     await state.update_data(name_msg_id=msg.message_id)
 
